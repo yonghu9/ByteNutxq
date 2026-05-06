@@ -180,11 +180,18 @@ class BytenutRenewal:
             return True
         return False
 
-    # ---------- 移除遮挡广告 ----------
+    # ---------- 移除遮挡广告（含 Cookie 弹窗处理） ----------
     def remove_overlay_ads(self, sb):
         try:
             sb.execute_script("""
                 (function() {
+                    // 1. 自动点击 EZ Cookie 同意按钮
+                    var acceptBtn = document.getElementById('ez-accept-all');
+                    if (acceptBtn) {
+                        acceptBtn.click();
+                    }
+
+                    // 2. 隐藏其他广告遮挡元素
                     var selectors = [
                         'ins.adsbygoogle', 'iframe[id^="aswift"]', 'div[id^="google_ads"]',
                         'div[class*="ad-"]:not([class*="adsterra-rewarded"])', 'div[class*="ads-"]',
