@@ -176,54 +176,9 @@ class BytenutRenewal:
         referer = f"https://www.bytenut.com/free-gamepanel/{server_id}"
         result = self.call_api_post(sb, API_START_SERVER.format(server_id), referer=referer)
         if result:
-            self.log("开机请求已发送")
+            self.log(f"开机请求已发送: {result.get('statusMessage')}")
             return True
         return False
-
-    # ---------- 移除遮挡广告（含 Cookie 弹窗处理） ----------
-    def remove_overlay_ads(self, sb):
-        try:
-            sb.execute_script("""
-                (function() {
-                    // 1. 自动点击 EZ Cookie 同意按钮
-                    var acceptBtn = document.getElementById('ez-accept-all');
-                    if (acceptBtn) {
-                        acceptBtn.click();
-                    }
-
-                    // 2. 隐藏其他广告遮挡元素
-                    var selectors = [
-                        'ins.adsbygoogle', 'iframe[id^="aswift"]', 'div[id^="google_ads"]',
-                        'div[class*="ad-"]:not([class*="adsterra-rewarded"]):not([class*="extend-reward-dialog"])',
-                        'div[class*="ads-"]',
-                        'div[id*="ad-"]:not([id*="adsterra"]):not([id*="extend-reward"])',
-                        'div[id*="ads-"]',
-                        '.ad-container', '.ads-wrapper', '.fixed-bottom-banner',
-                        '.ezoic-floating-bottom', '.fc-ab-root'
-                    ];
-                    selectors.forEach(function(s) {
-                        document.querySelectorAll(s).forEach(function(el) {
-                            if (el.innerHTML.indexOf('turnstile') !== -1 ||
-                                el.innerHTML.indexOf('cf-turnstile') !== -1 ||
-                                el.innerHTML.indexOf('extend-btn') !== -1 ||
-                                el.innerHTML.indexOf('adsterra-rewarded') !== -1 ||
-                                el.innerHTML.indexOf('Claim Reward') !== -1 ||
-                                el.innerHTML.indexOf('Watch Ad') !== -1 ||
-                                el.innerHTML.indexOf('reward-option') !== -1) {
-                                return;
-                            }
-                            el.style.display = 'none';
-                            el.style.visibility = 'hidden';
-                            el.style.height = '0px';
-                            el.width = '0px';
-                        });
-                    });
-                    document.body.style.overflow = 'auto';
-                    document.body.style.position = 'static';
-                })();
-            """)
-        except:
-            pass
 
     # ---------- Turnstile 处理 ----------
     def is_turnstile_present(self, sb):
@@ -238,25 +193,18 @@ class BytenutRenewal:
 
     def wait_turnstile(self, sb, timeout=60):
         if not self.is_turnstile_present(sb):
+            self.log("ℹ️ 无 Turnstile 验证")
             return True
         self.log("⏳ 等待 Turnstile 验证...")
         start = time.time()
         last_click = 0
         while time.time() - start < timeout:
-            self.remove_overlay_ads(sb)
-            try:
-                sb.execute_script("""
-                    var elem = document.querySelector('.cf-turnstile');
-                    if(elem) elem.scrollIntoView({block: 'center'});
-                """)
-            except:
-                pass
             try:
                 val = sb.execute_script(
                     """return document.querySelector("input[name='cf-turnstile-response']")?.value || "";"""
                 )
                 if len(val) > 20:
-                    self.log("✅ Turnstile 通过")
+                    self.log("✅ Turnstile 完成")
                     return True
             except:
                 pass
@@ -271,131 +219,37 @@ class BytenutRenewal:
         self.log("⚠️ Turnstile 超时")
         return False
 
-    # ---------- 处理扩展奖励选择弹窗 ----------
-    def handle_reward_picker(self, sb):
-        """如果弹出 extend-reward-dialog，点击其中的 Watch Ad 按钮"""
+    def click_extend_button(self, sb, timeout=30):
+        if not self.wait_turnstile(sb):
+            return False
+        self.log("⏳ 等待 Extend 按钮...")
         try:
-            if not sb.execute_script("return !!document.querySelector('.extend-reward-dialog');"):
-                return True
-            self.log("🛡️ 处理扩展奖励选择...")
-            # 点击 Watch Ad 选项
-            sb.execute_script("""
-                var btn = document.querySelector('button.reward-option--watch:not([disabled])');
-                if (btn) btn.click();
-            """)
-            time.sleep(3)
+            sb.wait_for_element_clickable(EXTEND_BTN, timeout=timeout)
+            sb.click(EXTEND_BTN)
             return True
-        except Exception as e:
-            self.log(f"奖励选择处理异常: {e}")
-            return True
-
-    # ---------- 处理广告验证弹窗 ----------
-    def handle_ad_verification(self, sb):
-        start = time.time()
-        while time.time() - start < 15:
-            if sb.execute_script("return !!document.querySelector('div.adsterra-rewarded-dialog');"):
-                break
-            time.sleep(1)
-        else:
-            self.log("未检测到广告验证弹窗，可能已直接完成")
-            return True
-
-        self.log("🛡️ 处理广告验证...")
-        try:
-            # 点击 Watch Ad
-            sb.execute_script("""
-                var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--primary');
-                if(btn) btn.click();
-            """)
-            time.sleep(3)
-
-            # 处理广告窗口
-            original_window = sb.driver.current_window_handle
-            if len(sb.driver.window_handles) > 1:
-                for handle in sb.driver.window_handles:
-                    if handle != original_window:
-                        sb.driver.switch_to.window(handle)
-                        break
-                try:
-                    time.sleep(12)
-                except:
-                    pass
-                if len(sb.driver.window_handles) > 1:
+        except:
+            if sb.is_element_present(EXTEND_BTN):
+                if sb.is_element_enabled(EXTEND_BTN):
                     try:
-                        sb.driver.close()
+                        sb.execute_script("arguments[0].click();", sb.find_element(EXTEND_BTN))
+                        return True
                     except:
                         pass
-                sb.driver.switch_to.window(original_window)
-                time.sleep(2)
-            else:
-                self.log("未检测到广告窗口，可能已被拦截，直接等待 Claim Reward")
-
-            # 等待并点击 Claim Reward
-            claim_start = time.time()
-            while time.time() - claim_start < 20:
-                if sb.execute_script("""
-                    var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--success');
-                    return btn && !btn.disabled;
-                """):
-                    break
-                time.sleep(1)
-            sb.execute_script("""
-                var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--success');
-                if(btn) btn.click();
-            """)
-            time.sleep(3)
-            self.log("✅ 广告验证完成")
-            return True
-        except Exception as e:
-            self.log(f"广告验证异常: {e}")
-            return True
-
-    # ---------- 续期点击与验证 ----------
-    def try_extend_and_verify(self, sb, server_id, old_expiry):
-        if not self.wait_turnstile(sb):
-            return False, ""
-
-        self.remove_overlay_ads(sb)
-        self.log("⏳ 点击续期按钮...")
-        button_clicked = False
-        try:
-            if sb.is_element_visible(EXTEND_BTN):
-                sb.execute_script("arguments[0].click();", sb.find_element(EXTEND_BTN))
-                button_clicked = True
-        except:
-            pass
-        if not button_clicked:
-            return False, ""
-
-        time.sleep(2)
-
-        self.handle_reward_picker(sb)
-
-        self.handle_ad_verification(sb)
-
-        time.sleep(5)
-        for _ in range(6):
-            new_ext = self.get_extension_data(sb, server_id)
-            if new_ext:
-                new_expiry = new_ext.get("expiredTime", "")
-                if new_expiry and new_expiry != old_expiry:
-                    self.log(f"✅ 续期生效: {self.format_expiry(new_expiry)}")
-                    return True, self.format_expiry(new_expiry)
-            time.sleep(5)
-
-        if sb.is_element_present(EXTEND_BTN) and not sb.is_element_enabled(EXTEND_BTN):
-            return "cooldown", ""
-        return False, ""
+                else:
+                    self.log("⏳ 按钮禁用（冷却）")
+                    return False
+            return False
 
     def format_expiry(self, dt_str):
+        """将 API 返回的时间字符串转换为统一的美观格式"""
         if not dt_str:
             return ""
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-                try:
-                    dt = datetime.strptime(dt_str, fmt)
-                    return dt.strftime("%b %d, %Y, %I:%M %p UTC")
-                except ValueError:
-                    continue
+            try:
+                dt = datetime.strptime(dt_str, fmt)
+                return dt.strftime("%b %d, %Y, %I:%M %p UTC")
+            except ValueError:
+                continue
         return dt_str
 
     def wait_until_running(self, sb, server_id, timeout=300, interval=10):
@@ -405,12 +259,20 @@ class BytenutRenewal:
             if servers:
                 for srv in servers:
                     if srv.get("id") == server_id:
-                        state = (srv.get("serverInfo") or {}).get("state", "unknown")
+                        state = srv.get("serverInfo", {}).get("state", "unknown")
+                        self.log(f"当前状态: {state}")
                         if state == "running":
                             return True, state
             time.sleep(interval)
-        return False, "unknown"
+        servers = self.get_servers_data(sb)
+        state = "unknown"
+        if servers:
+            for srv in servers:
+                if srv.get("id") == server_id:
+                    state = srv.get("serverInfo", {}).get("state", "unknown")
+        return False, state
 
+    # ---------- 等待续期生效 ----------
     def wait_until_not_expired(self, sb, server_id, timeout=120, interval=10):
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -418,8 +280,10 @@ class BytenutRenewal:
             if ext_info:
                 mins = ext_info.get("minutesUntilExpiration", 0)
                 if mins > 0:
+                    self.log(f"续期生效，距离过期: {mins} 分钟")
                     return True
             time.sleep(interval)
+        self.log("⚠️ 等待续期生效超时")
         return False
 
     def run(self):
@@ -467,17 +331,11 @@ class BytenutRenewal:
                         continue
 
                     server = servers[0]
-                    server_id = server.get("id") or ""
-                    server_info = server.get("serverInfo") or {}
-                    state = server_info.get("state", "running")
-                    expired_time = server.get("expiredTime") or ""
+                    server_id = server.get("id")
+                    state = server.get("serverInfo", {}).get("state", "running")
+                    expired_time = server.get("expiredTime", "")
                     expiry_str = self.format_expiry(expired_time)
                     self.log(f"服务器 {self.mask_server_id(server_id)}: 状态 {state}, 到期 {expiry_str}")
-
-                    if not server_id:
-                        self.send_tg("❌", "失败", user, "未知", state, expiry_str,
-                                     "服务器ID无效", self.shot(sb, f"invalid_id_{idx}.png"))
-                        continue
 
                     ext_info = self.get_extension_data(sb, server_id)
                     if not ext_info:
@@ -490,7 +348,7 @@ class BytenutRenewal:
                     mins_until_exp = ext_info.get("minutesUntilExpiration", 9999)
                     expired = mins_until_exp <= 0
 
-                    self.log(f"可续期:{can_extend}, 冷却剩余:{cooldown_min}分, 距离过期:{mins_until_exp}分")
+                    self.log(f"续期状态: 可续期={can_extend}, 冷却剩余={cooldown_min}分钟, 距离过期={mins_until_exp}分钟")
 
                     # ========== 离线处理 ==========
                     if state == "offline":
@@ -500,40 +358,41 @@ class BytenutRenewal:
                             time.sleep(5)
                             sb.click(RENEW_MENU)
                             time.sleep(3)
-                            result, new_time = self.try_extend_and_verify(sb, server_id, expired_time)
-                            if result is True:
+                            if self.click_extend_button(sb):
+                                self.log("✅ 续期成功，等待状态更新...")
                                 if not self.wait_until_not_expired(sb, server_id):
                                     self.send_tg("⚠️", "续期成功但状态未更新", user, server_id,
                                                  "offline", expiry_str,
-                                                 "无法开机，请稍后重试",
+                                                 "续期后服务器状态仍未刷新，无法开机，请稍后重试",
                                                  screenshot=self.shot(sb, f"start_fail_{idx}.png"))
                                     continue
+
+                                new_ext = self.get_extension_data(sb, server_id)
+                                new_expiry = new_ext.get("expiredTime", "") if new_ext else ""
+                                new_expiry_str = self.format_expiry(new_expiry)
 
                                 if self.api_start_server(sb, server_id):
                                     is_running, final_state = self.wait_until_running(sb, server_id)
                                     if is_running:
                                         self.send_tg("✅", "续期并开机成功", user, server_id,
                                                      "offline -> running",
-                                                     f"{expiry_str} -> {new_time}",
+                                                     f"{expiry_str} -> {new_expiry_str}",
                                                      screenshot=self.shot(sb, f"ok_{idx}.png"))
                                     else:
                                         self.send_tg("⚠️", "续期成功，开机未确认", user, server_id,
                                                      f"offline -> {final_state}",
-                                                     new_time,
+                                                     new_expiry_str,
                                                      screenshot=self.shot(sb, f"start_timeout_{idx}.png"))
                                 else:
                                     self.send_tg("✅", "续期成功，开机失败", user, server_id,
-                                                 "offline", new_time,
+                                                 "offline", new_expiry_str,
                                                  screenshot=self.shot(sb, f"start_fail_{idx}.png"))
-                            elif result == "cooldown":
-                                self.send_tg("⏳", "续期后进入冷却", user, server_id, "offline", expiry_str,
-                                             screenshot=self.shot(sb, f"cooldown_{idx}.png"))
                             else:
                                 self.send_tg("❌", "续期失败", user, server_id, "offline", expiry_str,
                                              screenshot=self.shot(sb, f"extend_fail_{idx}.png"))
                         else:
                             if expired:
-                                extra = "服务器已过期且处于冷却期，无法续期和开机"
+                                extra = "服务器已过期且处于冷却期，无法续期和开机，请稍后再试或手动处理。"
                                 self.send_tg("🚫", "无法操作", user, server_id, state, expiry_str, extra,
                                              screenshot=self.shot(sb, f"expired_cooldown_{idx}.png"))
                             else:
@@ -557,7 +416,7 @@ class BytenutRenewal:
                     if not can_extend:
                         extra = ""
                         if expired:
-                            extra = "服务器已过期，但当前处于冷却期，续期被暂时禁止"
+                            extra = "服务器已过期，但当前处于冷却期，续期被暂时禁止。"
                         self.log(f"⏳ 冷却中 ({cooldown_min}分钟)")
                         self.send_tg("⏳", "冷却中", user, server_id, state, expiry_str, extra,
                                      screenshot=self.shot(sb, f"cooldown_{idx}.png"))
@@ -568,14 +427,18 @@ class BytenutRenewal:
                     time.sleep(5)
                     sb.click(RENEW_MENU)
                     time.sleep(3)
-                    result, new_time = self.try_extend_and_verify(sb, server_id, expired_time)
-                    if result is True:
-                        self.send_tg("✅", "续期成功", user, server_id, state,
-                                     f"{expiry_str} -> {new_time}",
-                                     screenshot=self.shot(sb, f"ok_{idx}.png"))
-                    elif result == "cooldown":
-                        self.send_tg("⏳", "续期后进入冷却", user, server_id, state, expiry_str,
-                                     screenshot=self.shot(sb, f"cooldown_{idx}.png"))
+                    if self.click_extend_button(sb):
+                        time.sleep(3)
+                        new_ext_info = self.get_extension_data(sb, server_id)
+                        if new_ext_info:
+                            new_expired = new_ext_info.get("expiredTime", "")
+                            new_expiry_str = self.format_expiry(new_expired)
+                            self.send_tg("✅", "续期成功", user, server_id, state,
+                                         f"{expiry_str} -> {new_expiry_str}",
+                                         screenshot=self.shot(sb, f"ok_{idx}.png"))
+                        else:
+                            self.send_tg("⚠️", "状态未知", user, server_id, state, expiry_str,
+                                         screenshot=self.shot(sb, f"unknown_{idx}.png"))
                     else:
                         self.send_tg("❌", "续期失败", user, server_id, state, expiry_str,
                                      screenshot=self.shot(sb, f"extend_fail_{idx}.png"))
