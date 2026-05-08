@@ -180,7 +180,7 @@ class BytenutRenewal:
             return True
         return False
 
-    # ---------- 移除遮挡广告（含 Cookie 弹窗处理） ----------
+    # ---------- 移除遮挡广告 ----------
     def remove_overlay_ads(self, sb):
         try:
             sb.execute_script("""
@@ -194,10 +194,8 @@ class BytenutRenewal:
                     // 2. 隐藏其他广告遮挡元素
                     var selectors = [
                         'ins.adsbygoogle', 'iframe[id^="aswift"]', 'div[id^="google_ads"]',
-                        'div[class*="ad-"]:not([class*="adsterra-rewarded"]):not([class*="extend-reward-dialog"])',
-                        'div[class*="ads-"]',
-                        'div[id*="ad-"]:not([id*="adsterra"]):not([id*="extend-reward"])',
-                        'div[id*="ads-"]',
+                        'div[class*="ad-"]:not([class*="adsterra-rewarded"])', 'div[class*="ads-"]',
+                        'div[id*="ad-"]:not([id*="adsterra"])', 'div[id*="ads-"]',
                         '.ad-container', '.ads-wrapper', '.fixed-bottom-banner',
                         '.ezoic-floating-bottom', '.fc-ab-root'
                     ];
@@ -208,8 +206,7 @@ class BytenutRenewal:
                                 el.innerHTML.indexOf('extend-btn') !== -1 ||
                                 el.innerHTML.indexOf('adsterra-rewarded') !== -1 ||
                                 el.innerHTML.indexOf('Claim Reward') !== -1 ||
-                                el.innerHTML.indexOf('Watch Ad') !== -1 ||
-                                el.innerHTML.indexOf('reward-option') !== -1) {
+                                el.innerHTML.indexOf('Watch Ad') !== -1) {
                                 return;
                             }
                             el.style.display = 'none';
@@ -238,12 +235,15 @@ class BytenutRenewal:
 
     def wait_turnstile(self, sb, timeout=60):
         if not self.is_turnstile_present(sb):
+            self.log("ℹ️ 无 Turnstile 验证")
             return True
         self.log("⏳ 等待 Turnstile 验证...")
         start = time.time()
         last_click = 0
         while time.time() - start < timeout:
+            # 清除广告遮挡
             self.remove_overlay_ads(sb)
+            # 滚动到 Turnstile 可见区域
             try:
                 sb.execute_script("""
                     var elem = document.querySelector('.cf-turnstile');
@@ -256,7 +256,7 @@ class BytenutRenewal:
                     """return document.querySelector("input[name='cf-turnstile-response']")?.value || "";"""
                 )
                 if len(val) > 20:
-                    self.log("✅ Turnstile 通过")
+                    self.log("✅ Turnstile 完成")
                     return True
             except:
                 pass
@@ -266,42 +266,27 @@ class BytenutRenewal:
                     sb.uc_gui_click_captcha()
                     last_click = now
                 except:
-                    pass
+                    # 备用方案：直接点击 .cf-turnstile 元素
+                    try:
+                        elem = sb.find_element('.cf-turnstile')
+                        elem.click()
+                        last_click = now
+                    except:
+                        pass
             time.sleep(1)
         self.log("⚠️ Turnstile 超时")
         return False
 
-    # ---------- 处理扩展奖励选择弹窗 ----------
-    def handle_reward_picker(self, sb):
-        """如果弹出 extend-reward-dialog，点击其中的 Watch Ad 按钮"""
-        try:
-            if not sb.execute_script("return !!document.querySelector('.extend-reward-dialog');"):
-                return True
-            self.log("🛡️ 处理扩展奖励选择...")
-            # 点击 Watch Ad 选项
-            sb.execute_script("""
-                var btn = document.querySelector('button.reward-option--watch:not([disabled])');
-                if (btn) btn.click();
-            """)
-            time.sleep(3)
-            return True
-        except Exception as e:
-            self.log(f"奖励选择处理异常: {e}")
-            return True
-
     # ---------- 处理广告验证弹窗 ----------
     def handle_ad_verification(self, sb):
-        start = time.time()
-        while time.time() - start < 15:
-            if sb.execute_script("return !!document.querySelector('div.adsterra-rewarded-dialog');"):
-                break
-            time.sleep(1)
-        else:
-            self.log("未检测到广告验证弹窗，可能已直接完成")
-            return True
-
-        self.log("🛡️ 处理广告验证...")
+        """处理广告验证弹窗，成功返回 True"""
         try:
+            # 检测弹窗
+            if not sb.execute_script("return !!document.querySelector('div.adsterra-rewarded-dialog');"):
+                return True
+            self.log("🛡️ 处理广告验证...")
+            time.sleep(1)
+
             # 点击 Watch Ad
             sb.execute_script("""
                 var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--primary');
@@ -309,36 +294,19 @@ class BytenutRenewal:
             """)
             time.sleep(3)
 
-            # 处理广告窗口
+            # 处理新窗口
             original_window = sb.driver.current_window_handle
             if len(sb.driver.window_handles) > 1:
                 for handle in sb.driver.window_handles:
                     if handle != original_window:
                         sb.driver.switch_to.window(handle)
                         break
-                try:
-                    time.sleep(12)
-                except:
-                    pass
-                if len(sb.driver.window_handles) > 1:
-                    try:
-                        sb.driver.close()
-                    except:
-                        pass
+                time.sleep(12)  # 广告要求停留10秒，稍加缓冲
+                sb.driver.close()
                 sb.driver.switch_to.window(original_window)
                 time.sleep(2)
-            else:
-                self.log("未检测到广告窗口，可能已被拦截，直接等待 Claim Reward")
 
-            # 等待并点击 Claim Reward
-            claim_start = time.time()
-            while time.time() - claim_start < 20:
-                if sb.execute_script("""
-                    var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--success');
-                    return btn && !btn.disabled;
-                """):
-                    break
-                time.sleep(1)
+            # 点击 Claim Reward
             sb.execute_script("""
                 var btn = document.querySelector('div.adsterra-rewarded-dialog button.el-button--success');
                 if(btn) btn.click();
@@ -348,7 +316,7 @@ class BytenutRenewal:
             return True
         except Exception as e:
             self.log(f"广告验证异常: {e}")
-            return True
+            return True  # 让流程继续
 
     # ---------- 续期点击与验证 ----------
     def try_extend_and_verify(self, sb, server_id, old_expiry):
@@ -368,11 +336,9 @@ class BytenutRenewal:
             return False, ""
 
         time.sleep(2)
-
-        self.handle_reward_picker(sb)
-
         self.handle_ad_verification(sb)
 
+        # 验证结果
         time.sleep(5)
         for _ in range(6):
             new_ext = self.get_extension_data(sb, server_id)
