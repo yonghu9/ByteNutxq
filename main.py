@@ -114,9 +114,14 @@ class BytenutRenewal:
 
     # ========== 浏览器内 fetch（变量嵌入脚本）==========
     def fetch_api(self, sb, url, method="GET", referer=None):
+        """
+        在浏览器上下文执行 fetch，变量直接嵌入脚本字符串。
+        返回解析后的 data，失败返回 None。
+        """
         if referer is None:
             referer = URL_HOMEPAGE
-            
+
+        # 用 json.dumps 确保字符串正确转义
         import json
         url_js = json.dumps(url)
         method_js = json.dumps(method)
@@ -127,12 +132,12 @@ class BytenutRenewal:
         var token = localStorage.getItem('yl-token')
                  || sessionStorage.getItem('yl-token') || '';
         var headers = {{
-            'Accept': 'application/json, text/plain, */*'，
+            'Accept': 'application/json, text/plain, */*',
             'Referer': {referer_js}
         }};
         if (token) {{ headers['Yl-Token'] = token; }}
-        fetch({url_js}， {{
-            method: {method_js}，
+        fetch({url_js}, {{
+            method: {method_js},
             headers: headers,
             credentials: 'include'
         }})
@@ -309,7 +314,7 @@ class BytenutRenewal:
             """)
         except Exception:
             pass
-
+    
     # ========== Turnstile ==========
     def is_turnstile_present(self, sb):
         try:
